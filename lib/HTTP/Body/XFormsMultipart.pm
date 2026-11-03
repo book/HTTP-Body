@@ -13,7 +13,7 @@ HTTP::Body::XFormsMultipart - HTTP Body XForms multipart/related submission Pars
 
 =head1 SYNOPSIS
 
-    use HTTP::Body::XForms;
+    use HTTP::Body::XFormsMultipart;
 
 =head1 DESCRIPTION
 
@@ -23,6 +23,10 @@ This body type is used to parse XForms submission. In this case, the
 XML part that contains the model is indicated by the start attribute
 in the content-type. The XML content is stored unparsed on the
 parameter XForms:Model.
+
+Every other part is an upload named after its Content-ID: its data is
+written to a temporary file like that of any multipart upload, and a NUL
+in the Content-ID is stripped.
 
 =head1 METHODS
 
@@ -60,8 +64,9 @@ sub start {
 
 =item handler
 
-This function is overridden to differ the start part, which should be
-set as the XForms:Model param if its content type is application/xml.
+This function is overridden to name the parts by their Content-ID: the
+start part becomes the XForms:Model param, and its data the body; every
+other part becomes an upload, as described above.
 
 =cut
 

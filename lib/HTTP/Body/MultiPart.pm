@@ -18,13 +18,25 @@ HTTP::Body::MultiPart - HTTP Body Multipart Parser
 
 =head1 DESCRIPTION
 
-HTTP Body Multipart Parser.
+HTTP Body Multipart Parser for multipart/form-data bodies.
+
+A part with a non-empty filename in its Content-Disposition is an upload: its
+data is written to a temporary file as it arrives, and the part is stored with
+L<HTTP::Body/upload> once it is complete.  Every other part is stored with
+L<HTTP::Body/param> and L<HTTP::Body/part_data>, except a part with an empty
+filename (a file field left empty), which is dropped.
+
+See L<HTTP::Body/Limits> for the limits on parts and their headers, and
+L<HTTP::Body/CONFIGURING UPLOAD TEMPORARY FILES> for the temporary files.
 
 =head1 METHODS
 
 =over 4
 
 =item init
+
+Takes the boundary from the content type, croaking if it has none, and starts
+the parser in the preamble state.
 
 =cut
 
@@ -43,6 +55,10 @@ sub init {
 }
 
 =item spin
+
+Runs the parse method of the current state (parse_preamble, parse_boundary,
+parse_header or parse_body) until one of them needs more data or the body is
+done.
 
 =cut
 
@@ -64,6 +80,8 @@ sub spin {
 
 =item boundary
 
+The boundary parameter of the content type.
+
 =cut
 
 sub boundary {
@@ -71,6 +89,8 @@ sub boundary {
 }
 
 =item boundary_begin
+
+C<--> followed by the boundary.
 
 =cut
 
@@ -80,6 +100,8 @@ sub boundary_begin {
 
 =item boundary_end
 
+boundary_begin followed by C<-->.
+
 =cut
 
 sub boundary_end {
@@ -88,6 +110,8 @@ sub boundary_end {
 
 =item crlf
 
+The line ending of a multipart body, C<"\x0D\x0A">.
+
 =cut
 
 sub crlf () {
@@ -95,6 +119,8 @@ sub crlf () {
 }
 
 =item delimiter_begin
+
+crlf followed by boundary_begin: the delimiter that ends the data of a part.
 
 =cut
 
@@ -105,6 +131,8 @@ sub delimiter_begin {
 
 =item delimiter_end
 
+crlf followed by boundary_end: the close delimiter that ends the body.
+
 =cut
 
 sub delimiter_end {
@@ -113,6 +141,10 @@ sub delimiter_end {
 }
 
 =item parse_preamble
+
+Drops the preamble before the first boundary and moves on to the boundary
+state.  Until the boundary is found, only as many bytes are kept as could be
+its start.
 
 =cut
 
@@ -137,6 +169,11 @@ sub parse_preamble {
 }
 
 =item parse_boundary
+
+Reads a delimiter line.  A delimiter starts the next part and the header
+state; a close delimiter ends the body, and whatever follows it (padding, an
+epilogue) is ignored.  Croaks on a line that is neither, and when the body has
+more than C<$HTTP::Body::MultiPart::max_parts> parts.
 
 =cut
 
@@ -181,6 +218,13 @@ sub parse_boundary {
 }
 
 =item parse_header
+
+Reads a part's header block, up to the blank line, into C<< $part->{headers} >>,
+keyed by field name with the first letter of each word upper-cased; a field
+that occurs more than once gets an array reference.  A continuation line is
+joined to the line before it, and a line that is no header field is dropped.
+Croaks when the block exceeds C<$HTTP::Body::MultiPart::max_header_size> bytes
+or C<$HTTP::Body::MultiPart::max_header_lines> lines.
 
 =cut
 
@@ -250,6 +294,11 @@ sub parse_header {
 
 =item parse_body
 
+Passes a part's data on to handler as it arrives, holding back only as many
+bytes as could be the start of the next delimiter.  At the delimiter it sets
+C<< $part->{done} >>, calls handler a last time and moves on to the boundary
+state.
+
 =cut
 
 sub parse_body {
@@ -287,6 +336,13 @@ sub parse_body {
 }
 
 =item handler
+
+Called by parse_body with the part each time data arrives.  On the first call
+it takes the part's name and filename from its Content-Disposition, unless a
+subclass has named the part already, and strips any NUL from the filename.  A
+part with a non-empty filename gets a temporary file, and its data is written
+there as it arrives.  Once the part is done it is stored as described under
+L</DESCRIPTION>.  Croaks when the temporary file can not be written.
 
 =cut
 

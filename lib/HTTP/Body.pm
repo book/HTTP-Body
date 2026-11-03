@@ -29,13 +29,13 @@ HTTP::Body - HTTP Body Parser
 =head1 SYNOPSIS
 
     use HTTP::Body;
-    
+
     sub handler : method {
         my ( $class, $r ) = @_;
 
         my $content_type   = $r->headers_in->get('Content-Type');
         my $content_length = $r->headers_in->get('Content-Length');
-        
+
         my $body   = HTTP::Body->new( $content_type, $content_length );
         my $length = $content_length;
 
@@ -44,21 +44,23 @@ HTTP::Body - HTTP Body Parser
             $r->read( my $buffer, ( $length < 8192 ) ? $length : 8192 );
 
             $length -= length($buffer);
-            
+
             $body->add($buffer);
         }
-        
-        my $uploads     = $body->upload;     # hashref
-        my $params      = $body->param;      # hashref
-        my $param_order = $body->param_order # arrayref
-        my $body        = $body->body;       # IO::Handle
+
+        my $uploads     = $body->upload;      # hashref
+        my $params      = $body->param;       # hashref
+        my $param_order = $body->param_order; # arrayref
+        my $raw         = $body->body;        # IO::Handle
     }
 
 =head1 DESCRIPTION
 
 HTTP::Body parses chunks of HTTP POST data and supports
 application/octet-stream, application/json, application/x-www-form-urlencoded,
-and multipart/form-data.
+multipart/form-data, and XForms submissions (multipart/related and
+application/xml).  A body of any other content type is handled like
+application/octet-stream.
 
 Chunked bodies are supported by not passing a length value to new().
 
@@ -189,8 +191,15 @@ sub DESTROY {
 
 =item add
 
-Add string to internal buffer. Will call spin unless done. returns
-length before adding self.
+Feeds the next piece of the body to the parser, which parses as much of it as
+it can unless it is done already.  Data beyond the content length is ignored.
+
+With a content length, add returns the number of bytes still expected as a
+negative number, and 0 once the body is complete.  For a chunked body it
+returns nothing.
+
+add croaks when one of the limits under L</Limits> is exceeded, and when the
+framing of a chunked body is malformed.
 
 =cut
 
@@ -394,9 +403,8 @@ sub init {
 
 =item length
 
-Returns the total length of data we expect to read if known.
-In the case of a chunked request, returns the amount of data
-read so far.
+Returns the number of bytes of the body read so far, up to the content length.
+Of a chunked body only the chunk data counts.
 
 =cut
 
@@ -407,7 +415,8 @@ sub length {
 =item trailing_headers
 
 If a chunked request body had trailing headers, trailing_headers will
-return an HTTP::Headers object populated with those headers.
+return an HTTP::Headers object populated with those headers.  They are only
+read when they arrive in the same call to add as the last, zero-size chunk.
 
 =cut
 

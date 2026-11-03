@@ -23,6 +23,11 @@ This file documents the revision history for Perl extension HTTP::Body.
 	  is dropped instead of being stored under a made-up field name
 	- add: the caller's buffer is no longer modified in place when it
 	  exceeds the Content-Length, so a read-only value is accepted
+	- Docs: every method of the parser classes is described, add and
+	  length say what they return, trailing_headers says when the trailer
+	  is read; the README lists every limit, $basename_regexp and all
+	  runtime prerequisites
+	- File::Spec is declared as a prerequisite
 
 1.24      2026-10-26 18:28:01+01:00 Europe/Berlin
 	- SECURITY, CVE-2026-116131: urlencoded bodies are limited to
