@@ -15,8 +15,8 @@ This file documents the revision history for Perl extension HTTP::Body.
 	  no chunk-size line, a size that does not fit an integer, chunk data
 	  not followed by CRLF) croaks instead of buffering forever, and
 	  nothing after the trailer or after the body parser is done is kept
-	- SECURITY: the trailer of a chunked body is limited to
-	  $HTTP::Body::max_trailer_size bytes (32768) and
+	- SECURITY, CVE-2026-121006: the trailer of a chunked body is limited
+	  to $HTTP::Body::max_trailer_size bytes (32768) and
 	  $HTTP::Body::max_trailer_lines header lines (100); everything that
 	  followed the last chunk in the same call to add() was parsed with
 	  HTTP::Headers, which takes time quadratic in the number of fields of
