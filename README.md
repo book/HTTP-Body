@@ -145,6 +145,8 @@ To bound resource use on hostile input, `add()` enforces limits and croaks when 
 | `$HTTP::Body::MultiPart::max_header_size` | 32768 | bytes in a part's header block |
 | `$HTTP::Body::MultiPart::max_header_lines` | 100 | lines in a part's header block |
 | `$HTTP::Body::max_chunk_line_size` | 1024 | bytes in a chunk-size line of a chunked body |
+| `$HTTP::Body::max_trailer_size` | 32768 | bytes in the trailer of a chunked body |
+| `$HTTP::Body::max_trailer_lines` | 100 | header lines in the trailer of a chunked body |
 
 A chunked body with malformed framing (a line that is no chunk-size line, a size that does not fit an integer, chunk data not followed by CRLF) makes `add()` croak as well.
 

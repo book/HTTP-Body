@@ -105,6 +105,14 @@ bytes; a longer one makes add croak.  The default is 1024.  A chunked body
 whose framing is malformed (a line that is no chunk-size line, a size that does
 not fit an integer, chunk data not followed by CRLF) makes add croak as well.
 
+=item $HTTP::Body::max_trailer_size
+
+=item $HTTP::Body::max_trailer_lines
+
+The largest trailer of a chunked body (its header lines and the blank line
+that ends it), in bytes, and the most header lines it may have; a larger one
+makes add croak.  The defaults are 32768 and 100.
+
 =back
 
 =head1 METHODS
@@ -144,6 +152,8 @@ sub new {
         chunk_remaining => 0,
         chunk_crlf     => 0,
         chunk_eof      => 0,
+        chunk_trailer  => undef,
+        chunk_trailer_lines => 0,
         body           => undef,
         chunked        => !defined $content_length,
         content_length => defined $content_length ? $content_length : -1,
@@ -209,14 +219,16 @@ framing of a chunked body is malformed.
 my $chunk_size_line = qr/^(?>([\da-fA-F]+))[^\n]*\x0D\x0A\z/;
 
 our $max_chunk_line_size = 1024;
+our $max_trailer_size    = 32 * 1024;
+our $max_trailer_lines   = 100;
 
 sub add {
     my $self = shift;
 
     if ( $self->{chunked} ) {
 
-        # Nothing after the zero-length chunk belongs to the body: trailing
-        # bytes must neither be reparsed as chunks nor pile up in the buffer.
+        # Nothing after the blank line that ends the trailer belongs to the
+        # body: it must neither be reparsed nor pile up in the buffer.
         return if $self->{chunk_eof};
 
         $self->{chunk_buffer} .= $_[0] if defined $_[0];
@@ -257,19 +269,51 @@ sub add {
                 $self->{chunk_crlf} = 0;
             }
 
-            # A chunk-size line.  Its length is checked before it is complete,
-            # so that an endless line can not grow the buffer.
-            my $eol      = index( $self->{chunk_buffer}, "\x0A" );
-            my $line_len = $eol >= 0 ? $eol + 1 : length $self->{chunk_buffer};
+            # After the last chunk: the trailer, header lines up to a blank
+            # line that ends the body.  It is collected until then.
+            if ( defined $self->{chunk_trailer} ) {
+                my $line = $self->_chunk_line(
+                    $max_trailer_size ? $max_trailer_size - length $self->{chunk_trailer} : undef,
+                    "Chunked body trailer exceeds $max_trailer_size bytes",
+                );
 
-            if ( $max_chunk_line_size && $line_len > $max_chunk_line_size ) {
-                Carp::croak("Chunk size line exceeds $max_chunk_line_size bytes");
+                # wait for the rest of the line
+                return unless defined $line;
+
+                if ( $line =~ /^\x0D?\x0A\z/ ) {
+                    if ( my $message = HTTP::Message->parse( $self->{chunk_trailer} ) ) {
+                        $self->{trailing_headers} = $message->headers;
+                    }
+
+                    $self->{chunk_buffer}  = '';
+                    $self->{chunk_trailer} = undef;
+                    $self->{chunk_eof}     = 1;
+
+                    return;
+                }
+
+                # HTTP::Headers takes time quadratic in the number of fields
+                # of one name, so the number of lines is limited as well.
+                if ( $max_trailer_lines && ++$self->{chunk_trailer_lines} > $max_trailer_lines ) {
+                    Carp::croak("Chunked body trailer exceeds $max_trailer_lines lines");
+                }
+
+                $self->{chunk_trailer} .= $line;
+
+                # trailing_headers parses the trailer again when asked
+                delete $self->{trailing_headers};
+
+                next;
             }
 
-            # wait for the rest of the line
-            return if $eol < 0;
+            # A chunk-size line.
+            my $line = $self->_chunk_line(
+                $max_chunk_line_size || undef,
+                "Chunk size line exceeds $max_chunk_line_size bytes",
+            );
 
-            my $line = substr( $self->{chunk_buffer}, 0, $line_len, '' );
+            # wait for the rest of the line
+            return unless defined $line;
 
             unless ( $line =~ $chunk_size_line ) {
                 Carp::croak('Invalid chunk size line');
@@ -285,25 +329,18 @@ sub add {
             my $chunk_len = hex($digits);
 
             if ( $chunk_len == 0 ) {
-                # End of data, there may be trailing headers
-                if (  my ($headers) = $self->{chunk_buffer} =~ m/(.*)\x0D\x0A/s ) {
-                    if ( my $message = HTTP::Message->parse( $headers ) ) {
-                        $self->{trailing_headers} = $message->headers;
-                    }
-                }
-
-                $self->{chunk_buffer} = '';
-                $self->{chunk_eof}    = 1;
-
-                # Set content_length equal to the amount of data we read,
-                # so the spin methods can finish up.
+                # End of data: set content_length equal to the amount of data
+                # we read, so the spin methods can finish up.
                 $self->{content_length} = $self->{length};
 
                 unless ( $self->{state} eq 'done' ) {
                     $self->spin;
                 }
 
-                return;
+                # The trailer follows, up to a blank line.
+                $self->{chunk_trailer} = '';
+
+                next;
             }
 
             $self->{chunk_remaining} = $chunk_len;
@@ -334,6 +371,23 @@ sub add {
     }
 
     return ( $self->length - $cl );
+}
+
+# Takes the next line, LF included, off the chunk buffer, or returns nothing
+# while it is incomplete.  Its length is checked before it is complete, so
+# that an endless line can not grow the buffer: longer than $room bytes, it
+# croaks with $error.  An undefined $room is no limit.
+sub _chunk_line {
+    my ( $self, $room, $error ) = @_;
+
+    my $eol      = index( $self->{chunk_buffer}, "\x0A" );
+    my $line_len = $eol >= 0 ? $eol + 1 : length $self->{chunk_buffer};
+
+    Carp::croak($error) if defined $room && $line_len > $room;
+
+    return if $eol < 0;
+
+    return substr( $self->{chunk_buffer}, 0, $line_len, '' );
 }
 
 =item body
@@ -415,13 +469,30 @@ sub length {
 =item trailing_headers
 
 If a chunked request body had trailing headers, trailing_headers will
-return an HTTP::Headers object populated with those headers.  They are only
-read when they arrive in the same call to add as the last, zero-size chunk.
+return an HTTP::Headers object populated with those headers.  The trailer is
+read up to the blank line that ends it, also when it arrives in later calls to
+add than the last, zero-size chunk; until then, trailing_headers returns the
+header lines that have arrived so far.  The body itself is done at the last
+chunk.
 
 =cut
 
 sub trailing_headers {
-    return shift->{trailing_headers};
+    my $self = shift;
+
+    # A trailer still being read gives the lines that have arrived of it, as
+    # some clients never send its blank line.  It is parsed when asked for,
+    # not again for every line that arrives.
+    if (   !$self->{trailing_headers}
+        && defined $self->{chunk_trailer}
+        && length $self->{chunk_trailer} )
+    {
+        if ( my $message = HTTP::Message->parse( $self->{chunk_trailer} ) ) {
+            $self->{trailing_headers} = $message->headers;
+        }
+    }
+
+    return $self->{trailing_headers};
 }
 
 =item spin
